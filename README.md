@@ -29,11 +29,11 @@
 | 模块 | 说明 |
 | --- | --- |
 | 📄 文档摄入管线 | 支持 PDF / Word / Markdown / TXT 上传，异步解析 → 清洗 → 分块（Chunking）→ 向量化 → 写入向量库 |
-| 🔍 混合检索 | 向量语义检索 + 关键词检索，配合**重排序（Rerank）**提升召回质量 |
+| 🔍 向量语义检索 | 基于向量相似度召回 Top-K 相关片段，可配置相似度阈值过滤低质结果 |
 | 💬 流式对话 | 基于 **SSE（Server-Sent Events）** 实现打字机式流式输出，低延迟体验 |
-| 🧵 多轮会话记忆 | 基于会话窗口 + Redis 维护多轮上下文，支持追问 |
+| 🧵 多轮会话记忆 | 基于会话窗口维护多轮上下文，支持追问；存储后端可插拔（H2 / MySQL） |
 | 🔗 答案溯源 | 回答附带引用文档片段与页码，可点击跳转原文 |
-| ⚡ 高性能 | 异步非阻塞处理、Redis 缓存热点问答、接口幂等设计 |
+| ⚡ 高性能 | 异步非阻塞处理、本地 Caffeine 缓存热点问答（可平滑升级为 Redis 分布式缓存）、接口幂等设计 |
 
 ## 🏗️ 系统架构
 
@@ -119,8 +119,9 @@ flowchart TB
 - **语言/框架**：Java 17、Spring Boot 3.4、Spring MVC
 - **AI 框架**：Spring AI 1.0（ChatClient / EmbeddingModel / VectorStore）
 - **模型**：本地 **Ollama**（对话 qwen2.5 + 向量 bge-m3），可插拔切换 OpenAI / DeepSeek / 通义千问
-- **数据层**：MyBatis-Plus、MySQL 8、Redis
-- **向量检索**：PostgreSQL + pgVector（或 Qdrant / Milvus）
+- **数据层**：MyBatis-Plus；默认 H2 内存库（零配置开箱即用），生产可切换 MySQL 8
+- **缓存**：默认 Caffeine 本地缓存；生产可切换 Redis 分布式缓存
+- **向量检索**：默认 SimpleVectorStore（本地 JSON 持久化）；生产可切换 PostgreSQL + pgVector（或 Qdrant / Milvus）
 - **异步与通信**：Spring `@Async`、线程池、SSE
 - **工程化**：Maven、Docker、SpringDoc (OpenAPI)
 
@@ -132,17 +133,18 @@ git clone <your-repo-url>
 
 # 2. 启动本地模型服务 Ollama（需先安装 Ollama：https://ollama.com）
 #    拉取对话模型 + 向量模型
-ollama pull qwen2.5:7b          # 对话模型
+ollama pull qwen2.5-coder:7b      # 对话模型
 ollama pull bge-m3                # 向量模型（1024 维，中文 RAG 推荐）
-ollama serve                    # 启动，默认监听 http://localhost:11434
+ollama serve                      # 启动，默认监听 http://localhost:11434
 
-# 3. 启动基础依赖（MySQL / Redis / pgVector，可用 docker-compose 一键拉起）
-docker-compose up -d
-
-# 4. 运行
+# 3. 运行（默认零依赖：内置 H2 内存库 + 本地向量库 + Caffeine，无需 Docker）
 mvn spring-boot:run
 
 # 访问：http://localhost:8080/index.html 即可在演示页体验问答
+
+# ===== 可选：切换到生产档（MySQL + Redis + pgVector）=====
+# docker-compose up -d
+# mvn spring-boot:run -Dspring-boot.run.profiles=docker
 ```
 
 > 💡 **模型可插拔**：本项目默认对接本地 Ollama（零成本、可离线演示）。如需切换为云端模型

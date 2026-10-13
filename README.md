@@ -129,7 +129,7 @@ flowchart TB
 
 ```bash
 # 1. 克隆项目
-git clone <your-repo-url>
+git clone https://github.com/x020608333-oss/ai-knowledge-base.git
 
 # 2. 启动本地模型服务 Ollama（需先安装 Ollama：https://ollama.com）
 #    拉取对话模型 + 向量模型

@@ -3,9 +3,16 @@
 > 一个基于 **RAG（Retrieval-Augmented Generation，检索增强生成）** 架构的企业级智能问答后端系统。
 > 使用 **Java + Spring Boot 3 + Spring AI** 构建，融合大语言模型（LLM）与向量检索，为用户提供**基于私有知识库的精准、可溯源问答服务**。
 
-[![Java](https://img.shields.io/badge/Java-17-orange.svg)](https://www.oracle.com/java/)
-[![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.4-green.svg)](https://spring.io/projects/spring-boot)
-[![Spring AI](https://img.shields.io/badge/Spring%20AI-1.0-blue.svg)](https://spring.io/projects/spring-ai)
+<p align="center">
+  <img src="https://img.shields.io/badge/Java-17-orange?logo=openjdk&logoColor=white" alt="Java 17"/>
+  <img src="https://img.shields.io/badge/Spring%20Boot-3.4-6DB33F?logo=springboot&logoColor=white" alt="Spring Boot"/>
+  <img src="https://img.shields.io/badge/Spring%20AI-1.0-6DB33F?logo=spring&logoColor=white" alt="Spring AI"/>
+  <img src="https://img.shields.io/badge/Ollama-Local%20LLM-000000" alt="Ollama"/>
+  <img src="https://img.shields.io/badge/pgVector-4169E1?logo=postgresql&logoColor=white" alt="pgVector"/>
+  <img src="https://img.shields.io/badge/Redis-DC382D?logo=redis&logoColor=white" alt="Redis"/>
+  <img src="https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white" alt="Docker"/>
+  <img src="https://img.shields.io/badge/License-MIT-yellow" alt="License: MIT"/>
+</p>
 
 ---
 
@@ -30,36 +37,82 @@
 
 ## 🏗️ 系统架构
 
-```
-┌──────────┐     ┌────────────────────────────────────────────┐     ┌──────────┐
-│  Client  │────▶│            Spring Boot Application          │────▶│   MySQL  │
-└──────────┘     │                                            │     └──────────┘
-                 │  ┌────────────┐   ┌─────────────────────┐  │
-                 │  │ Controller │──▶│   RagService        │  │     ┌──────────┐
-                 │  └────────────┘   │  (RAG 编排核心)      │──┼────▶│  Redis   │
-                 │                   └─────────────────────┘  │     └──────────┘
-                 │            │              │                │
-                 │            ▼              ▼                │
-                 │   ┌──────────────┐  ┌──────────────┐       │     ┌──────────┐
-                 │   │ Embedding    │  │ VectorStore  │───────┼────▶│  Vector  │
-                 │   │ Client(向量化)│  │ (向量检索)    │       │     │   DB     │
-                 │   └──────────────┘  └──────────────┘       │     └──────────┘
-                 │            │                                │
-                 │            ▼                                │
-                 │   ┌──────────────────────────────┐          │     ┌──────────┐
-                 │   │   ChatClient (Spring AI)     │──────────┼────▶│   LLM    │
-                 │   │   (对接大语言模型)            │          │     │  Provider│
-                 │   └──────────────────────────────┘          │     └──────────┘
-                 └────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    Client["🖥️ 前端演示页<br/>index.html · SSE 流式"]
+
+    subgraph APP["Spring Boot 3 · Spring AI 1.0"]
+        direction TB
+        CC["ChatController<br/>POST /api/chat"]
+        KC["KbDocumentController<br/>POST /api/kb/upload"]
+
+        subgraph INGEST["📥 文档摄入管线（异步 @Async）"]
+            KDS["KbDocumentServiceImpl<br/>解析 → 分块 → 向量化"]
+        end
+
+        subgraph RAG["💬 RAG 编排 · RagServiceImpl"]
+            direction TB
+            R1["① 会话与历史记忆"]
+            R2["② 向量检索召回 Top-K"]
+            R3["③ 组装 Prompt<br/>系统提示 + 检索上下文 + 历史"]
+            R4["④ LLM 流式生成"]
+            R5["⑤ 持久化 · 尾部引用标记"]
+            R1 --> R2 --> R3 --> R4 --> R5
+        end
+
+        subgraph SAI["Spring AI 抽象层（可插拔）"]
+            CHAT["ChatClient"]
+            EMB["EmbeddingModel"]
+            VS["VectorStore 接口"]
+        end
+    end
+
+    subgraph STORE["💾 存储层（默认零依赖，生产可切换）"]
+        DB[("MySQL / H2<br/>会话 · 消息 · 文档元信息")]
+        VEC[("SimpleVectorStore<br/>本地 JSON 向量库")]
+        CACHE[("Caffeine / Redis<br/>热点问答缓存")]
+    end
+
+    subgraph MODEL["🤖 模型层 · Ollama（本地可离线）"]
+        LLM["对话模型<br/>qwen2.5 / deepseek 等"]
+        EMBM["bge-m3 · 向量模型"]
+    end
+
+    Client -->|上传 PDF / Word / MD / TXT| KC
+    KC --> KDS
+    KDS -->|分块向量化| EMB
+    KDS -->|写入向量| VS
+    KDS -->|更新处理状态| DB
+
+    Client -->|提问| CC
+    CC --> RAG
+    R2 -->|问题向量化| EMB
+    R2 -->|语义检索| VS
+    R4 -->|流式调用| CHAT
+    R1 -.-> DB
+    R5 -.-> DB
+    R5 -.-> CACHE
+    CC -.->|SSE 流式返回 + 引用来源| Client
+
+    EMB --> EMBM
+    CHAT --> LLM
+    VS --> VEC
+
+    classDef ai fill:#E3F2FD,stroke:#1565C0,color:#0D47A1
+    classDef store fill:#FFF3E0,stroke:#E65100,color:#BF360C
+    classDef model fill:#F3E5F5,stroke:#6A1B9A,color:#4A148C
+    class CHAT,EMB,VS ai
+    class DB,VEC,CACHE store
+    class LLM,EMBM model
 ```
 
-**请求时序（一次问答）：**
-1. 用户提问 → `ChatController`
-2. 问题改写（结合历史记忆）→ 向量化 → `VectorStore` 检索 Top-K 片段
-3. 重排序（Rerank）精选最相关片段
-4. 组装 Prompt（系统提示 + 检索上下文 + 用户问题）
-5. `ChatClient` 调用 LLM，通过 SSE 流式返回
-6. 保存会话记录，缓存热点问答
+**一次问答的完整时序：**
+1. 用户提问 → `ChatController`（以 SSE 流式通道返回）
+2. `RagServiceImpl` 加载会话历史记忆（最近 N 条）
+3. 问题经 `EmbeddingModel` 向量化 → `VectorStore` 检索 Top-K 相关片段
+4. 组装 Prompt（RAG 系统提示 + 检索上下文 + 历史 + 当前问题）
+5. `ChatClient` 调用 LLM 流式生成，逐字经 SSE 推送前端
+6. 持久化会话消息，尾部附带**引用来源标记**，并写入热点问答缓存
 
 ## 🛠️ 技术栈
 

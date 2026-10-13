@@ -15,10 +15,10 @@ Base URL：`http://localhost:8080`
 
 **响应示例：**
 ```json
-{ "code": 200, "message": "success", "data": { "docId": 1, "message": "文档已接收，正在后台解析与向量化..." } }
+{ "code": 200, "message": "success", "data": { "docId": 1, "message": "文档已接收，正在后台解析与向量化，请稍后查询处理状态" } }
 ```
 
-> 文档为**异步**处理，轮询 MySQL `kb_document.status` 字段查看进度（COMPLETED 才可被检索到）。
+> 文档为**异步**处理，轮询业务库 `kb_document.status` 字段查看进度（PENDING → PROCESSING → COMPLETED / FAILED，**仅 COMPLETED 才会被检索到**）。默认业务库为 H2 内存库（可通过 http://localhost:8080/h2-console 查看），生产可切换 MySQL。
 
 **curl 示例：**
 ```bash
@@ -56,6 +56,9 @@ curl -N -H "Content-Type: application/json" \
   -d '{"question":"年假怎么算？"}' \
   http://localhost:8080/api/chat/stream
 ```
+
+> 💡 **GET 版本**（便于浏览器 / 命令行直接体验，无需构造 POST 请求体）：
+> `GET /api/chat/stream?question=年假怎么算？&sessionId=xxx`（`sessionId` 可选，留空则新建会话）
 
 ---
 

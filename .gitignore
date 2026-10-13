@@ -1,0 +1,32 @@
+# Maven
+target/
+!.mvn/wrapper/maven-wrapper.jar
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.settings/
+.project
+.classpath
+
+# 日志
+logs/
+*.log
+
+# 环境与密钥（切勿提交真实 API Key）
+.env
+application-local.yml
+application-secret.yml
+
+# 本地辅助脚本（勿提交）
+push-to-github.bat
+
+# 本地运行时数据：SimpleVectorStore 持久化文件（勿提交，含用户向量数据）
+data/
+*.h2.db
+*.mv.db
+
+# 系统
+.DS_Store
+Thumbs.db

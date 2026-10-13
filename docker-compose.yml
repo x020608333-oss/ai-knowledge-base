@@ -1,0 +1,54 @@
+# 可选生产架构：MySQL 业务库 + Redis 缓存（配合 application-docker.yml 使用）
+# 注意：默认【无需 Docker】即可运行（H2 + 本地向量库 + Caffeine 缓存）；
+#       本文件仅作为可选的生产档基础设施。
+# 使用：docker-compose up -d，并以 --spring.profiles.active=docker 启动应用
+version: "3.8"
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: aikb-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root123
+      MYSQL_DATABASE: ai_knowledge_base
+      TZ: Asia/Shanghai
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./sql/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-proot123"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: aikb-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+
+  # 说明：向量库默认使用 SimpleVectorStore（本地文件 data/vector-store.json，见 VectorStoreConfig），
+  # 生产部署时挂载 ./data 卷即可持久化；如需启用 pgVector，取消下方注释并参考 docs/架构设计.md。
+  # pgvector:
+  #   image: pgvector/pgvector:pg16
+  #   container_name: aikb-pgvector
+  #   environment:
+  #     POSTGRES_USER: postgres
+  #     POSTGRES_PASSWORD: postgres
+  #     POSTGRES_DB: vector_store
+  #     TZ: Asia/Shanghai
+  #   ports:
+  #     - "5432:5432"
+  #   volumes:
+  #     - pgvector_data:/var/lib/postgresql/data
+  #     - ./sql/pgvector-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
+volumes:
+  mysql_data:
+  redis_data:

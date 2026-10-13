@@ -1,0 +1,106 @@
+server:
+  port: 8080
+  servlet:
+    encoding:
+      charset: UTF-8
+      force: true
+
+spring:
+  application:
+    name: ai-knowledge-base
+
+  # ===== 业务数据库：H2 内存库（MODE=MySQL 兼容，零配置开箱即用）=====
+  datasource:
+    driver-class-name: org.h2.Driver
+    url: jdbc:h2:mem:aikb;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1
+    username: sa
+    password: ""
+
+  # ===== SQL 初始化：启动时自动建表（H2，生产 MySQL 脚本见 sql/schema.sql）=====
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema.sql
+
+  # ===== H2 控制台（演示/调试用，访问 http://localhost:8080/h2-console）=====
+  h2:
+    console:
+      enabled: true
+
+  # ===== Spring AI：文件上传大小限制 =====
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 100MB
+
+  # ===== Spring AI 配置 =====
+  ai:
+    # ===== 本地模型：Ollama（默认启用，零成本/离线，适合演示与面试）=====
+    # 需先安装 Ollama 并拉取模型：
+    #   ollama pull qwen2.5-coder:7b      # 对话模型
+    #   ollama pull bge-m3                # 向量模型（1024 维，中文 RAG 推荐）
+    # 启动服务：ollama serve（默认监听 http://localhost:11434）
+    # 说明：qwen2.5-coder:7b 仅对话，向量化必须搭配独立的 embedding 模型（bge-m3）。
+    ollama:
+      base-url: http://localhost:11434
+      chat:
+        options:
+          model: qwen2.5-coder:7b       # 对话模型，可按需换成 llama3.1 / deepseek-r1 等
+          temperature: 0.3            # RAG 场景偏低温度，减少幻觉
+      embedding:
+        options:
+          model: bge-m3               # 向量模型（1024 维，中文效果最佳）
+
+    # ===== 云端模型（备用）：OpenAI 兼容接口 =====
+    # 如需切换回云端模型，注释掉上面的 ollama 段并启用下面配置，
+    # 同时引入 spring-ai-starter-model-openai 依赖，并把下方向量维度改回 1536。
+    # 该协议同样兼容 通义千问 DashScope、DeepSeek、vLLM、OneAPI 等。
+    # openai:
+    #   base-url: https://api.openai.com/v1
+    #   api-key: ${OPENAI_API_KEY:sk-xxxx}
+    #   chat:
+    #     options:
+    #       model: gpt-4o-mini
+    #       temperature: 0.3
+    #   embedding:
+    #     options:
+    #       model: text-embedding-3-small
+
+    # 向量库默认使用 SimpleVectorStore（本地文件持久化，见 VectorStoreConfig），无需额外配置。
+    # 切换生产级 pgVector 时，启用 application-docker.yml 并恢复下方 pgvector 配置：
+    # vectorstore:
+    #   pgvector:
+    #     index-type: HNSW
+    #     distance-type: COSINE_DISTANCE
+    #     dimensions: 1024        # 需与 embedding 模型输出维度一致（bge-m3 = 1024）
+    #     initialize-schema: true
+
+# ===== 自定义 RAG 参数 =====
+app:
+  rag:
+    top-k: 5                    # 向量检索召回条数
+    similarity-threshold: 0.5   # 相似度阈值，过滤低相关内容
+    chat-memory-window: 10      # 会话记忆保留最近 N 条
+    max-context-chars: 4000     # 拼接进 Prompt 的最大上下文字符数
+    vector-store-path: data/vector-store.json   # SimpleVectorStore 本地持久化文件
+
+# ===== MyBatis-Plus =====
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    db-config:
+      id-type: auto
+
+# ===== 日志 =====
+logging:
+  level:
+    com.example.aikb: debug
+
+# ===== SpringDoc (OpenAPI) =====
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html

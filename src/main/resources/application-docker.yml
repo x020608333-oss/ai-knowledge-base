@@ -1,0 +1,17 @@
+# ===== 生产档：MySQL 持久化（配合 docker-compose 使用）=====
+# 启动方式：
+#   1) docker-compose up -d                    # 先起 MySQL / Redis
+#   2) IDEA Run Configuration 的 Active profiles 填 docker，或命令行加 --spring.profiles.active=docker
+# 说明：表结构由 MySQL 容器首次初始化时从 sql/schema.sql 自动创建，故此处关闭应用侧 SQL 初始化。
+spring:
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://localhost:3306/ai_knowledge_base?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: root
+    password: root123
+  sql:
+    init:
+      mode: never
+
+# 向量库仍为 SimpleVectorStore（本地文件 data/vector-store.json 持久化，见 VectorStoreConfig）。
+# 如需切到生产级 pgVector，请参考 docs/架构设计.md 中「可插拔向量库」一节。

@@ -14,7 +14,8 @@ spring:
     driver-class-name: org.h2.Driver
     url: jdbc:h2:mem:aikb;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1
     username: sa
-    password: ""
+    # 本地默认密码仍可用；生产/对外环境请通过 DB_PASSWORD 覆盖
+    password: ${DB_PASSWORD:aikb-local}
 
   # ===== SQL 初始化：启动时自动建表（H2，生产 MySQL 脚本见 sql/schema.sql）=====
   sql:
@@ -22,10 +23,11 @@ spring:
       mode: always
       schema-locations: classpath:schema.sql
 
-  # ===== H2 控制台（演示/调试用，访问 http://localhost:8080/h2-console）=====
+  # ===== H2 控制台：默认关闭（避免空口令 sa 被本机其它进程利用）=====
+  # 仅本地调试时临时改为 true，并确保服务只监听 127.0.0.1
   h2:
     console:
-      enabled: true
+      enabled: false
 
   # ===== Spring AI：文件上传大小限制 =====
   servlet:

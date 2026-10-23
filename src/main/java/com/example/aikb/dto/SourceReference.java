@@ -23,4 +23,11 @@ public class SourceReference {
 
     /** 片段内容摘要 */
     private String snippet;
+
+    /** PDF 页码（从 1 开始；非 PDF 为 null） */
+    private Integer page;
+
+    public SourceReference(Integer index, String fileName, Double score, String snippet) {
+        this(index, fileName, score, snippet, null);
+    }
 }

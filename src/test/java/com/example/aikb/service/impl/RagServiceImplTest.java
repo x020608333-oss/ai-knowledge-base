@@ -38,7 +38,7 @@ import static org.mockito.Mockito.when;
  *
  * 重点验证两条主线：
  * 1. retrieve()：向量检索结果的字段映射（来源 / 正文 / 得分）与空值兜底。
- * 2. chat()：SSE 流式输出 = 模型正文 + 尾部 __REFERENCES__ 引用标记。
+ * 2. chat()：SSE 流式输出 = 会话标记 __SESSION__ + 模型正文 + 尾部 __REFERENCES__ 引用标记。
  */
 @ExtendWith(MockitoExtension.class)
 class RagServiceImplTest {
@@ -127,12 +127,13 @@ class RagServiceImplTest {
         List<String> out = service.chat("123", "年假多少天").collectList().block();
 
         assertThat(out).isNotNull();
-        // 2 段模型正文 + 1 段引用来源
-        assertThat(out).hasSize(3);
-        assertThat(out.get(0)).isEqualTo("根据制度，");
-        assertThat(out.get(1)).isEqualTo("年假为 15 天。");
-        assertThat(out.get(2)).startsWith("__REFERENCES__");
-        assertThat(out.get(2)).contains("hr-policy.pdf");
+        // 1 段会话标记 + 2 段模型正文 + 1 段引用来源
+        assertThat(out).hasSize(4);
+        assertThat(out.get(0)).startsWith("__SESSION__");
+        assertThat(out.get(1)).isEqualTo("根据制度，");
+        assertThat(out.get(2)).isEqualTo("年假为 15 天。");
+        assertThat(out.get(3)).startsWith("__REFERENCES__");
+        assertThat(out.get(3)).contains("hr-policy.pdf");
         verify(messageMapper, atLeastOnce()).insert(any(ChatMessage.class));
     }
 
@@ -150,7 +151,9 @@ class RagServiceImplTest {
 
         List<String> out = service.chat("456", "随便问问").collectList().block();
 
-        assertThat(out).hasSize(1);
-        assertThat(out.get(0)).isEqualTo("未找到相关资料。");
+        // 1 段会话标记 + 1 段模型正文
+        assertThat(out).hasSize(2);
+        assertThat(out.get(0)).startsWith("__SESSION__");
+        assertThat(out.get(1)).isEqualTo("未找到相关资料。");
     }
 }

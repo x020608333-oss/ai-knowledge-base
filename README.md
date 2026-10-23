@@ -2,6 +2,8 @@
 
 > 一个基于 **RAG（Retrieval-Augmented Generation，检索增强生成）** 架构的企业级智能问答后端系统。
 > 使用 **Java + Spring Boot 3 + Spring AI** 构建，融合大语言模型（LLM）与向量检索，为用户提供**基于私有知识库的精准、可溯源问答服务**。
+>
+> 运行要求：JDK 17 + Maven；默认对接本地 Ollama（需拉取对话模型与 embedding 模型）。**不需要 Docker/云 API Key**，但并不是"零运行时依赖"。
 
 <p align="center">
   <img src="https://img.shields.io/badge/Java-17-orange?logo=openjdk&logoColor=white" alt="Java 17"/>
@@ -46,7 +48,7 @@ flowchart TB
         CC["ChatController<br/>POST /api/chat"]
         KC["KbDocumentController<br/>POST /api/kb/upload"]
 
-        subgraph INGEST["📥 文档摄入管线（异步 @Async）"]
+        subgraph INGEST["📥 文档摄入管线（显式线程池异步）"]
             KDS["KbDocumentServiceImpl<br/>解析 → 分块 → 向量化"]
         end
 
@@ -116,12 +118,12 @@ flowchart TB
 
 ## 🛠️ 技术栈
 
-- **语言/框架**：Java 17、Spring Boot 3.4、Spring MVC
+- **语言/框架**：Java 17、Spring Boot 3.4、Spring MVC（需要 JDK 17 编译/运行）
 - **AI 框架**：Spring AI 1.0（ChatClient / EmbeddingModel / VectorStore）
 - **模型**：本地 **Ollama**（对话 qwen2.5 + 向量 bge-m3），可插拔切换 OpenAI / DeepSeek / 通义千问
 - **数据层**：MyBatis-Plus；默认 H2 内存库（零配置开箱即用），生产可切换 MySQL 8
-- **缓存**：默认 Caffeine 本地缓存；生产可切换 Redis 分布式缓存
-- **向量检索**：默认 SimpleVectorStore（本地 JSON 持久化）；生产可切换 PostgreSQL + pgVector（或 Qdrant / Milvus）
+- **缓存**：默认 Caffeine 本地缓存；Redis 为可选升级项，需要自行引入 `spring-boot-starter-data-redis` 并启用相应配置
+- **向量检索**：默认 SimpleVectorStore（本地 JSON 持久化）；pgVector 是设计预留方案——当前 pom 未引入 pgVector 依赖，切换需自行添加 `spring-ai-pgvector-store` 与 PostgreSQL 驱动；也可接 Qdrant / Milvus
 - **异步与通信**：Spring `@Async`、线程池、SSE
 - **工程化**：Maven、Docker、SpringDoc (OpenAPI)
 
@@ -137,7 +139,7 @@ ollama pull qwen2.5-coder:7b      # 对话模型
 ollama pull bge-m3                # 向量模型（1024 维，中文 RAG 推荐）
 ollama serve                      # 启动，默认监听 http://localhost:11434
 
-# 3. 运行（默认零依赖：内置 H2 内存库 + 本地向量库 + Caffeine，无需 Docker）
+# 3. 运行（默认内置 H2 内存库 + 本地向量库 + Caffeine，无需 Docker；但需要 JDK17 与 Ollama 模型）
 mvn spring-boot:run
 
 # 访问：http://localhost:8080/index.html 即可在演示页体验问答
@@ -163,3 +165,18 @@ mvn spring-boot:run
 - **深度**：涉及异步、流式、缓存、幂等等后端进阶议题，不是 CRUD
 - **可讲性**：有架构、有难点、有优化指标，面试可深挖
 - **可扩展**：可继续演进为多知识库、多租户、Agent 工具调用等
+
+
+## 🔒 安全与一致性修复（v1.1）
+
+- **异步落库真实生效**：不再在同一个 Bean 内调用 `@Async` 方法（Spring 代理不会拦截自调用）；上传时先把文件读成 `byte[]`，再提交到显式注入的 `ragTaskExecutor`，请求结束后也不会丢临时文件。
+- **多轮会话可用**：SSE 首帧新增 `__SESSION__<id>` 标记，前端写入 `localStorage` 并随下一次请求带回；后端会校验 sessionId，非法或不存在的会话自动新建。
+- **H2 控制台默认关闭**，`sa` 密码改为 `${DB_PASSWORD:aikb-local}`，避免空口令 + 控制台被本机其它进程利用；仅本地调试时才临时开启。
+- **存储型 XSS 修复**：引用来源的文件名/片段来自上传文档，前端改用 `textContent` 逐节点渲染，不再拼接 `innerHTML`。
+- **缓存读写闭环**：热点问答缓存现在会真正读取；新文档处理完成后清空缓存，避免旧答案命中新知识库。
+- **引用与上下文对齐**：只把真正进入 Prompt 的片段返回为引用，并按 PDF 元数据补充页码（1-based），避免"引用了没进入上下文的片段"。
+- **上传类型白名单**：仅允许 PDF/DOCX/MD/TXT，其他类型返回 400；异步线程不再接收 `MultipartFile`。
+
+> 验证：`mvn test`（需要 JDK 17）。当前包含 4 个测试类、11 个用例；其中参数校验返回 HTTP 400 的用例已与实现对齐。
+
+> 构建/测试需要 JDK 17 + Maven：`mvn test`。如果本机只有 JDK 8，会因 Spring Boot 3 / Java 17 语法无法编译。

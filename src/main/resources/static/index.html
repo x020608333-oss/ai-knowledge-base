@@ -46,6 +46,7 @@
   const btn = document.getElementById('send');
   const input = document.getElementById('question');
   const marker = '__REFERENCES__';
+  const sessionMarker = '__SESSION__';
   let sessionId = localStorage.getItem('kb_session') || '';
 
   async function send() {
@@ -76,6 +77,12 @@
       for (const line of lines) {
         if (!line.startsWith('data:')) continue;
         const chunk = line.slice(5).trim();
+        if (chunk.startsWith(sessionMarker)) {
+          // 首次对话由后端新建会话并回传，写入 localStorage 供后续轮次复用
+          sessionId = chunk.slice(sessionMarker.length).trim();
+          localStorage.setItem('kb_session', sessionId);
+          continue;
+        }
         if (chunk.startsWith(marker)) {
           const refs = JSON.parse(chunk.slice(marker.length));
           renderRefs(refs);
@@ -89,9 +96,19 @@
   }
 
   function renderRefs(refs) {
-    src.innerHTML = '<b>引用来源：</b><br/>' + refs.map(r =>
-      `[${r.index}] ${r.fileName}（相似度 ${r.score.toFixed(3)}）：${r.snippet}`
-    ).join('<br/>');
+    // 文件名/片段来自用户上传的文档，必须用 textContent 渲染，避免存储型 XSS
+    src.textContent = '';
+    const title = document.createElement('b');
+    title.textContent = '引用来源：';
+    src.appendChild(title);
+    src.appendChild(document.createElement('br'));
+    refs.forEach(r => {
+      const line = document.createElement('div');
+      const score = typeof r.score === 'number' ? r.score.toFixed(3) : String(r.score ?? '');
+      const page = r.page ? `第${r.page}页 · ` : '';
+      line.textContent = `[${r.index}] ${page}${r.fileName}（相似度 ${score}）：${r.snippet}`;
+      src.appendChild(line);
+    });
   }
 
   btn.onclick = send;

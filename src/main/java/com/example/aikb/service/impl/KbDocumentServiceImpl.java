@@ -1,6 +1,7 @@
 package com.example.aikb.service.impl;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.example.aikb.config.CacheConfig;
 import com.example.aikb.entity.KbDocument;
 import com.example.aikb.mapper.KbDocumentMapper;
 import com.example.aikb.service.KbDocumentService;
@@ -13,8 +14,9 @@ import org.springframework.ai.reader.tika.TikaDocumentReader;
 import org.springframework.ai.transformer.splitter.TokenTextSplitter;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.cache.Cache;
+import org.springframework.cache.CacheManager;
 import org.springframework.core.io.ByteArrayResource;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -23,6 +25,7 @@ import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.Executor;
 
 /**
@@ -37,35 +40,54 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
 
     private final VectorStore vectorStore;
     private final Executor ragTaskExecutor;
+    private final CacheManager cacheManager;
+
+    private static final Set<String> ALLOWED_TYPES = Set.of("pdf", "docx", "md", "txt");
 
     public KbDocumentServiceImpl(VectorStore vectorStore,
-                                 @Qualifier("ragTaskExecutor") Executor ragTaskExecutor) {
+                                 @Qualifier("ragTaskExecutor") Executor ragTaskExecutor,
+                                 CacheManager cacheManager) {
         this.vectorStore = vectorStore;
         this.ragTaskExecutor = ragTaskExecutor;
+        this.cacheManager = cacheManager;
     }
 
     @Override
     public Long uploadDocument(MultipartFile file) {
-        String originalName = file.getOriginalFilename();
+        String uploadedName = file.getOriginalFilename();
+        // originalName 会被 lambda 捕获，必须保持 effectively final
+        String originalName = (uploadedName == null || uploadedName.trim().isEmpty())
+                ? "unnamed.txt" : uploadedName;
+        String fileType = resolveFileType(originalName);
+        if (!ALLOWED_TYPES.contains(fileType)) {
+            throw new IllegalArgumentException("不支持的文件类型: " + fileType + "，仅支持 PDF/DOCX/MD/TXT");
+        }
+        // 在请求线程里把文件读成字节：异步线程不再持有 MultipartFile（请求结束后临时文件可能被清理）
+        byte[] content;
+        try {
+            content = file.getBytes();
+        } catch (IOException e) {
+            throw new IllegalStateException("读取上传文件失败", e);
+        }
+
         KbDocument doc = new KbDocument();
         doc.setFileName(originalName);
-        doc.setFileType(resolveFileType(originalName));
+        doc.setFileType(fileType);
         doc.setFileSize(file.getSize());
         doc.setStatus("PENDING");
         doc.setCreateTime(LocalDateTime.now());
         doc.setUpdateTime(LocalDateTime.now());
         this.save(doc);
 
-        // 异步执行解析与向量化，立即返回，避免阻塞上传请求
-        processDocumentAsync(doc.getId(), file);
+        // 直接使用注入的线程池，避免同类内部调用 @Async 方法导致代理不生效
+        ragTaskExecutor.execute(() -> processDocument(doc.getId(), content, originalName, fileType));
         return doc.getId();
     }
 
     /**
      * 异步处理文档：解析 → 分块 → 向量化入库。
      */
-    @Async("ragTaskExecutor")
-    public void processDocumentAsync(Long docId, MultipartFile file) {
+    private void processDocument(Long docId, byte[] content, String fileName, String fileType) {
         KbDocument doc = this.getById(docId);
         if (doc == null) {
             return;
@@ -74,15 +96,13 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
         this.updateById(doc);
 
         try {
-            byte[] content = file.getBytes();
-
             // 1. 解析原文：PDF 用专用 Reader，其余（docx/md/txt）用 Tika
-            List<Document> documents = parse(content, doc.getFileName(), doc.getFileType());
+            List<Document> documents = parse(content, fileName, fileType);
 
             // 2. 为每个片段注入来源元数据（用于后续答案溯源）
             documents.forEach(d -> {
                 Map<String, Object> metadata = new HashMap<>(d.getMetadata());
-                metadata.put("file_name", doc.getFileName());
+                metadata.put("file_name", fileName);
                 metadata.put("doc_id", docId);
                 d.getMetadata().putAll(metadata);
             });
@@ -99,6 +119,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
             doc.setChunkCount(chunks.size());
             doc.setUpdateTime(LocalDateTime.now());
             this.updateById(doc);
+            clearAnswerCache();
             log.info("文档处理完成: id={}, 分块数={}", docId, chunks.size());
 
         } catch (Exception e) {
@@ -107,6 +128,17 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
             doc.setErrorMsg(e.getMessage());
             doc.setUpdateTime(LocalDateTime.now());
             this.updateById(doc);
+        }
+    }
+
+    private void clearAnswerCache() {
+        try {
+            Cache cache = cacheManager.getCache(CacheConfig.RAG_ANSWER_CACHE);
+            if (cache != null) {
+                cache.clear();
+            }
+        } catch (Exception e) {
+            log.warn("清理问答缓存失败", e);
         }
     }
 

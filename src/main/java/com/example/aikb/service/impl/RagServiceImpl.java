@@ -50,6 +50,9 @@ public class RagServiceImpl implements RagService {
     /** SSE 引用来源前缀标记，前端据此拆分正文与引用 */
     private static final String REFERENCES_MARKER = "__REFERENCES__";
 
+    /** SSE 会话前缀标记：新建会话时把 sessionId 回传前端，保证多轮记忆可用 */
+    private static final String SESSION_MARKER = "__SESSION__";
+
     /** 热点问答缓存名称（由 CacheConfig 提供 Caffeine 实现，TTL 1h） */
     private static final String CACHE_NAME = "ragAnswerCache";
 
@@ -81,17 +84,30 @@ public class RagServiceImpl implements RagService {
     @Override
     public Flux<String> chat(String sessionId, String question) {
         return Flux.defer(() -> {
-            // ---- 1. 准备会话 ----
-            String sid = (sessionId == null || sessionId.isBlank())
-                    ? createSession(question) : sessionId;
+            // ---- 1. 准备会话（校验并复用存在的 session，否则新建） ----
+            Long requestedSid = parseSessionId(sessionId);
+            String sid = (requestedSid == null || sessionMapper.selectById(requestedSid) == null)
+                    ? createSession(question) : String.valueOf(requestedSid);
 
             // ---- 2. 加载历史记忆 ----
             List<Message> history = loadHistory(sid);
 
-            // ---- 3. 检索召回 ----
+            // ---- 3. 检索召回（引用只包含真正进入上下文的片段） ----
             List<RetrievedChunk> chunks = retrieve(question, ragProperties.getTopK());
-            String context = buildContext(chunks);
-            List<SourceReference> references = buildReferences(chunks);
+            List<RetrievedChunk> selected = selectContextChunks(chunks);
+            String context = buildContext(selected);
+            List<SourceReference> references = buildReferences(selected);
+
+            // ---- 3.1 缓存命中：跳过 LLM，但保留多轮消息与引用 ----
+            String cached = getCachedAnswer(question);
+            if (cached != null && !cached.isBlank()) {
+                saveMessage(sid, "user", question, null);
+                saveMessage(sid, "assistant", cached, serializeReferences(references));
+                return Flux.concat(
+                        Flux.just(SESSION_MARKER + sid),
+                        Flux.just(cached),
+                        referenceTail(references));
+            }
 
             // ---- 4. 组装消息 ----
             StringBuilder userPrompt = new StringBuilder();
@@ -123,7 +139,9 @@ public class RagServiceImpl implements RagService {
                     })
                     .doOnError(e -> log.error("流式生成失败, sessionId={}", sid, e));
 
-            return stream.concatWith(referenceTail(references));
+            return Flux.concat(
+                    Flux.just(SESSION_MARKER + sid),
+                    stream.concatWith(referenceTail(references)));
         }).subscribeOn(Schedulers.fromExecutor(ragTaskExecutor));
     }
 
@@ -139,15 +157,86 @@ public class RagServiceImpl implements RagService {
         List<RetrievedChunk> chunks = new ArrayList<>();
         for (Document doc : docs) {
             Object fileName = doc.getMetadata().get("file_name");
-            chunks.add(new RetrievedChunk(
+            RetrievedChunk chunk = new RetrievedChunk(
                     fileName == null ? "未知来源" : fileName.toString(),
                     doc.getText(),
-                    doc.getScore() == null ? 0.0 : doc.getScore()));
+                    doc.getScore() == null ? 0.0 : doc.getScore());
+            chunk.setPage(extractPage(doc));
+            chunks.add(chunk);
         }
         return chunks;
     }
 
+    private Integer extractPage(Document doc) {
+        Object page = doc.getMetadata().get("page_number");
+        if (page == null) {
+            page = doc.getMetadata().get("page");
+        }
+        if (page instanceof Number number) {
+            // Spring AI 的 PagePdfDocumentReader 页码从 0 开始，展示时转为 1-based
+            return number.intValue() + 1;
+        }
+        if (page != null) {
+            try {
+                return Integer.parseInt(page.toString()) + 1;
+            } catch (NumberFormatException ignored) {
+                // 非数字页码直接忽略
+            }
+        }
+        return null;
+    }
+
     // ============================ 内部辅助方法 ============================
+
+    private Long parseSessionId(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return null;
+        }
+        try {
+            return Long.valueOf(sessionId.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /** 只保留能进入 Prompt 的片段，保证引用编号与实际上下文一致 */
+    private List<RetrievedChunk> selectContextChunks(List<RetrievedChunk> chunks) {
+        List<RetrievedChunk> selected = new ArrayList<>();
+        int total = 0;
+        for (RetrievedChunk chunk : chunks) {
+            String block = "\n[" + (selected.size() + 1) + "] 来源：" + chunk.getFileName()
+                    + "\n" + chunk.getContent() + "\n";
+            if (total + block.length() > ragProperties.getMaxContextChars()) {
+                break;
+            }
+            selected.add(chunk);
+            total += block.length();
+        }
+        return selected;
+    }
+
+    private String serializeReferences(List<SourceReference> references) {
+        try {
+            return objectMapper.writeValueAsString(references);
+        } catch (JsonProcessingException e) {
+            log.error("序列化引用来源失败", e);
+            return null;
+        }
+    }
+
+    private String getCachedAnswer(String question) {
+        try {
+            Cache cache = cacheManager.getCache(CACHE_NAME);
+            if (cache == null) {
+                return null;
+            }
+            Cache.ValueWrapper wrapper = cache.get(cacheKey(question));
+            return wrapper == null ? null : (String) wrapper.get();
+        } catch (Exception e) {
+            log.warn("读取答案缓存失败", e);
+            return null;
+        }
+    }
 
     /** 拼接检索上下文，控制最大长度，注入编号 [n] 便于溯源 */
     private String buildContext(List<RetrievedChunk> chunks) {
@@ -175,7 +264,7 @@ public class RagServiceImpl implements RagService {
             String snippet = c.getContent().length() > 120
                     ? c.getContent().substring(0, 120) + "..."
                     : c.getContent();
-            refs.add(new SourceReference(i + 1, c.getFileName(), c.getScore(), snippet));
+            refs.add(new SourceReference(i + 1, c.getFileName(), c.getScore(), snippet, c.getPage()));
         }
         return refs;
     }
@@ -241,7 +330,7 @@ public class RagServiceImpl implements RagService {
     }
 
     private String cacheKey(String question) {
-        return "rag:cache:" + question.hashCode();
+        return "rag:cache:" + question;
     }
 
     /** 在流末尾追加引用来源标记，供前端解析展示"答案溯源" */

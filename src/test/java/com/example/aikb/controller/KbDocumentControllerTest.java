@@ -31,7 +31,7 @@ class KbDocumentControllerTest {
 
         mockMvc.perform(multipart("/api/kb/upload").file(empty))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.code").value(500));
+                .andExpect(jsonPath("$.code").value(400));
 
         // 空文件应被拦截，不触发后续处理
         verifyNoInteractions(documentService);

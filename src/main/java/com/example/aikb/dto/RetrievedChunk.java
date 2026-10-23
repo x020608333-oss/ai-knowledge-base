@@ -15,4 +15,9 @@ public class RetrievedChunk {
     private String fileName;
     private String content;
     private Double score;
+    private Integer page;
+
+    public RetrievedChunk(String fileName, String content, Double score) {
+        this(fileName, content, score, null);
+    }
 }

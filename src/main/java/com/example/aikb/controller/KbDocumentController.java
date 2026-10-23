@@ -25,12 +25,16 @@ public class KbDocumentController {
     @PostMapping("/upload")
     public Result<Map<String, Object>> upload(@RequestParam("file") MultipartFile file) {
         if (file.isEmpty()) {
-            return Result.error("文件不能为空");
+            return Result.error(400, "文件不能为空");
         }
-        Long docId = documentService.uploadDocument(file);
-        Map<String, Object> data = new HashMap<>();
-        data.put("docId", docId);
-        data.put("message", "文档已接收，正在后台解析与向量化，请稍后查询处理状态");
-        return Result.success(data);
+        try {
+            Long docId = documentService.uploadDocument(file);
+            Map<String, Object> data = new HashMap<>();
+            data.put("docId", docId);
+            data.put("message", "文档已接收，正在后台解析与向量化，请稍后查询处理状态");
+            return Result.success(data);
+        } catch (IllegalArgumentException e) {
+            return Result.error(400, e.getMessage());
+        }
     }
 }

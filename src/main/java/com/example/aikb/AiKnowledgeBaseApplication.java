@@ -1,6 +1,5 @@
 package com.example.aikb;
 
-import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.scheduling.annotation.EnableAsync;
@@ -11,7 +10,6 @@ import org.springframework.scheduling.annotation.EnableAsync;
  * @EnableAsync 开启异步处理，用于文档解析/向量化等耗时任务的异步执行
  */
 @EnableAsync
-@MapperScan("com.example.aikb.mapper")
 @SpringBootApplication
 public class AiKnowledgeBaseApplication {
 
